@@ -26,5 +26,5 @@ imgui/backends/imgui_impl_opengl3.h
 
 add_executable(cfgedit "${sources}" "${headers}")
 target_include_directories(cfgedit PUBLIC imgui imgui/backends rapidjson/include)
-target_link_libraries(cfgedit PUBLIC glfw)
+target_link_libraries(cfgedit PUBLIC glfw opengl32.lib)
 
