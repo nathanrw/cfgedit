@@ -24,6 +24,8 @@ need to enable Windows 8 compatibilty to have the OS stretch the window for you.
 It has only been built on Windows and may need tweaking to work on other
 platforms.
 
+No support for strings at the moment.
+
 ## Building
 
 ```Bash
