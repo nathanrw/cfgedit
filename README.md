@@ -19,5 +19,5 @@ cmake --build . --target cfgedit
 # or start the IDE project
 ```
 
-[rapidjson][https://github.com/Tencent/rapidjson]
-[imgui][https://github.com/ocornut/imgui]
+[rapidjson]: https://github.com/Tencent/rapidjson
+[imgui]: https://github.com/ocornut/imgui
