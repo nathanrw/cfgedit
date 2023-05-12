@@ -1,3 +1,14 @@
+//////////////////////////////////////////////////////////////////////////////
+/// 
+/// cfgedit -- simple JSON config file editor.
+/// 
+/// Usage:
+/// 
+///     cfgedit
+/// 
+///     cfgedit <path>
+///
+//////////////////////////////////////////////////////////////////////////////
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -13,31 +24,105 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <sstream>
 
-struct file_deleter {
+//////////////////////////////////////////////////////////////////////////////
+// types
+//////////////////////////////////////////////////////////////////////////////
+
+/// @brief Functor for closing files.
+struct file_closer {
     void operator()(FILE* file) { fclose(file); }
 };
-using file_ptr = std::unique_ptr<FILE, file_deleter>;
 
+/// @brief unique_ptr which can close a FILE.
+using file_ptr = std::unique_ptr<FILE, file_closer>;
+
+/// @brief Config editor.
+///
+/// Tracks an open JSON config file and keeps a copy of the contents. Displays a
+/// UI using ImGUI to edit the content copy, and can save it back to the
+/// original file.
 class cfgedit {
 public:
+
+    /// @brief Constructor.
     cfgedit();
+
+    // Copying is prohibited.
     cfgedit(const cfgedit& that) = delete;
+
+    // Assignment is prohibited.
     cfgedit& operator=(const cfgedit& that) = delete;
+
+    /// @brief Destructor.
     ~cfgedit();
-    void open_file(const char* path);
+    
+    /// @brief Call ImGUI such that editing GUI for the currently open document
+    /// is displayed.
     void gui();
+
+    /// @brief Open the indicated file and parse its contents. If there is an error,
+    /// an error will be displayed.
+    void open_file(const char* path);
+
+    /// @brief Save the current contents to the last location we read.
     void save();
+
+    /// @brief Discard the contents and retained path.
     void close();
+
+    /// @brief Discard the contents and reload the retained path.
+    void reload();
+
 private:
-    void gui_for(const char* name, rapidjson::Value& value);
+
+    /// @brief Display ImGUI controls to edit a JSON value.
+    ///
+    /// This will inspect the value and recurse as needed. For instance, if the
+    /// value is an object then we will add GUI for each of its members.
+    ///
+    /// Heuristics are applied to identify structured data e.g. colours, and
+    /// display appropriate controls to edit them.
+    ///
+    /// @param name Label for the edit control. 
+    ///
+    /// @param value JSON value to edit.
+    ///
+    /// @param depth Current recursion depth. Start at 0. 
+    ///
+    /// @param fieldId Unique-ish id to push for controls. This gets pushed via
+    /// ImGui::PushID() for each value, and then incremented. In this way, the
+    /// controls for each value have an id distinct from one another --
+    /// otherwise, you can get weird behaviour if controls have the same label,
+    /// which is how ImGui usually identifies controls.
+    void gui_for(const char* name, rapidjson::Value& value, int depth, int* fieldId);
+
+    /// @brief Attempt to interpret a value as a colour and display GUI for it.
+    /// 
+    /// @param name Label for field.
+    ///
+    /// @param value Array value.
+    ///
+    /// @return Whether this value looked like a colour. IF not, then no GUI was
+    /// created for it.
     bool try_colour_gui_for(const char* name, rapidjson::Value& value);
+
+    // Path to last-read file.
     std::string m_file_path;
+
+    // Contents of last-read file.
     rapidjson::Document m_open_document;
 };
 
+//////////////////////////////////////////////////////////////////////////////
+// functions / callbacks
+//////////////////////////////////////////////////////////////////////////////
+
+/// @brief Write 32x32 RGBA data representing an icon to the array provided.
 static void get_icon_rgba(unsigned char rgba[32*32*4])
 {
+    // It's just beautiful isn't it.
     constexpr char* icon =
         "00000000000000000000000000000000"
         "00111111100111111100111111111100"
@@ -55,6 +140,10 @@ static void get_icon_rgba(unsigned char rgba[32*32*4])
         "00111111100111000000111111111100"
         "00111111100111000000111111111100"
         "00000000000000000000000000000000";
+
+    // The above is 32x16 since text characters typically are taller than they
+    // are wide, so 2:1 looks square. So we set two rows at a time on the
+    // output.
     for (size_t i = 0; i < 32; ++i) {
         for (size_t j = 0; j < 16; ++j) {
             char value = icon[i+j*32] == '0' ? 0 : 0xff;
@@ -72,18 +161,28 @@ static void get_icon_rgba(unsigned char rgba[32*32*4])
     }
 }
 
+/// @brief Output glfw errors.
 static void glfw_error_callback(int error, const char* description)
 {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
+/// @brief Open dropped path. It is assumed that `*window` has a `cfgedit` as
+/// its user pointer.
 static void glfw_drop_callback(GLFWwindow* window, int count, const char** paths)
 {
     if (count > 0) {
-        cfgedit* editor = (cfgedit*)glfwGetWindowUserPointer(window);
-        editor->open_file(paths[0]);
+        void* ptr = glfwGetWindowUserPointer(window);
+        if (ptr) {
+            cfgedit* editor = (cfgedit*)ptr;
+            editor->open_file(paths[0]);
+        }
     }
 }
+
+//////////////////////////////////////////////////////////////////////////////
+// cfgedit implementation
+//////////////////////////////////////////////////////////////////////////////
 
 cfgedit::cfgedit()
 = default;
@@ -93,59 +192,101 @@ cfgedit::~cfgedit()
 
 void cfgedit::gui()
 {
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(io.DisplaySize);
-    ImGui::Begin("cfgedit_window", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
     if (m_open_document.HasParseError()) {
         ImGui::Text("Parse error.");
+        ImGui::Text("Drag-drop a .json file onto this window to edit it.");
     } else if (m_open_document.IsNull()) {
         ImGui::Text("Drag-drop a .json file onto this window to edit it.");
     } else {
-        gui_for("Document", m_open_document);
         if (ImGui::Button("Save")) {
             save();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reload")) {
+            reload();
         }
         ImGui::SameLine();
         if (ImGui::Button("Close")) {
             close();
         }
+        ImGui::Separator();
+        int fieldId = 0;
+        gui_for(m_file_path.c_str(), m_open_document, 0, &fieldId);
     }
-    ImGui::End();
 }
 
-void cfgedit::gui_for(const char* name, rapidjson::Value& value)
+void cfgedit::gui_for(const char* name, rapidjson::Value& value, int depth, int* fieldId)
 {
+    // Push a unique-ish id for the UI for this value.
+    // todo: is this unique enough? I'm assuming we end up with the stack of ids plus the
+    // label getting concatenated together to form a composite id, but it might not actually
+    // work that way. Might need to revisit this if I get weird behaviour.
+    int id = ++* fieldId;
+    ImGui::PushID(id);
+
     if (value.IsNull()) {
+        // This is a rare scenario!
         ImGui::Text("<NULL>");
+
     } else if (value.IsBool()) {
+        // Edit bool.
         bool bValue = value.GetBool();
         if (ImGui::Checkbox(name, &bValue)) {
             value.SetBool(bValue);
         }
+
     } else if (value.IsObject()) {
-        for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
-            gui_for(it->name.GetString(), it->value);
+        // Edit object recursively. At level zero we don't push a tree node as
+        // that's a waste of space doesn't look nice, but subobjects get indented.
+        if (depth == 0 || ImGui::TreeNodeEx(name, ImGuiTreeNodeFlags_DefaultOpen)) {
+            for (auto it = value.MemberBegin(); it != value.MemberEnd(); ++it) {
+                gui_for(it->name.GetString(), it->value, depth+1, fieldId);
+            }
+            if (depth != 0) ImGui::TreePop();
         }
+
     } else if (value.IsArray()) {
-        try_colour_gui_for(name, value);
+        // Edit array recursively. Attempt to spot colours and provide nice GUI
+        // for them.
+        if (!try_colour_gui_for(name, value)) {
+            if (ImGui::TreeNodeEx(name, ImGuiTreeNodeFlags_DefaultOpen)) {
+                size_t i = 0;
+                for (auto it = value.Begin(); it != value.End(); ++it) {
+                    std::stringstream sstrm;
+                    sstrm << name << "[" << i++ << "]";
+                    gui_for(sstrm.str().c_str(), *it, depth+1, fieldId);
+                }
+                ImGui::TreePop();
+            }
+        }
+
     } else if (value.IsInt()) {
+        // Edit integer.
         int iValue = value.GetInt();
         if (ImGui::InputInt(name, &iValue)) {
             value.SetInt(iValue);
         }
+
     } else if (value.IsLosslessDouble()) {
+        // Edit real number.
         double dValue = value.GetDouble();
         if (ImGui::InputDouble(name, &dValue)) {
             value.SetDouble(dValue);
         }
     }
+
+    // Pop the Id we pushed before.
+    ImGui::PopID();
 }
 
+/// @brief Does a string end with a suffix
+/// @param str the suffix-haver
+/// @param suffix potential suffix
+/// @return true if 'str' has the suffix, false if not, or if either string is null.
 static bool str_ends_with(const char* str, const char* suffix)
 {
     if (!str || !suffix) return false;
-    size_t str_len = strlen(str);
+    size_t str_len = strlen(str); // bite me
     size_t suffix_len = strlen(suffix);
     if (suffix_len > str_len) return false;
     return strncmp(str + str_len - suffix_len, suffix, suffix_len) == 0;
@@ -153,6 +294,7 @@ static bool str_ends_with(const char* str, const char* suffix)
 
 bool cfgedit::try_colour_gui_for(const char* name, rapidjson::Value& value)
 {
+    // Check the name looks right, it's an array, and has a plausible length.
     bool ok = true;
     ok = ok && (
         str_ends_with(name, "Color") ||
@@ -163,6 +305,8 @@ bool cfgedit::try_colour_gui_for(const char* name, rapidjson::Value& value)
     ok = ok && value.IsArray();
     ok = ok && (value.Size() == 3 || value.Size() == 4);
     if (!ok) return false;
+
+    // Are colour components 0f..1f or 0..255? Get the colour as rgba.
     bool all_int = true;
     bool all_double = true;
     float rgba[4];
@@ -177,20 +321,23 @@ bool cfgedit::try_colour_gui_for(const char* name, rapidjson::Value& value)
         for (size_t i = 0; i < value.Size(); ++i) {
             rgba[i] = (float) value[i].GetDouble();
         }
-    }
-    else if (all_int) {
+    } else if (all_int) {
         for (size_t i = 0; i < value.Size(); ++i) {
             rgba[i] = value[i].GetInt() / 255.0f;
         }
     } else {
         return false;
     }
+
+    // Show edit UI.
     bool edited = false;
     if (value.Size() == 3) {
         edited = ImGui::ColorEdit3(name, rgba);
     } else {
         edited = ImGui::ColorEdit4(name, rgba);
     }
+
+    // Set the value if it was edited.
     if (edited) {
         if (all_double) {
             for (size_t i = 0; i < value.Size(); ++i) {
@@ -202,6 +349,9 @@ bool cfgedit::try_colour_gui_for(const char* name, rapidjson::Value& value)
             }
         }
     }
+
+    // Yep, it was a colour.
+    return true;
 }
 
 void cfgedit::open_file(const char* path)
@@ -213,6 +363,12 @@ void cfgedit::open_file(const char* path)
     rapidjson::AutoUTFInputStream<unsigned, rapidjson::FileReadStream> eis(bis);
     m_open_document = {};
     m_open_document.ParseStream<0, rapidjson::AutoUTF<unsigned>>(eis);
+}
+
+void cfgedit::reload()
+{
+    std::string file_path = m_file_path;
+    open_file(file_path.c_str());
 }
 
 void cfgedit::save()
@@ -234,7 +390,11 @@ void cfgedit::close()
     m_open_document = {};
 }
 
-int main(int, char**)
+//////////////////////////////////////////////////////////////////////////////
+// main function
+//////////////////////////////////////////////////////////////////////////////
+
+int main(int argc, char** argv)
 {
     // Init glfw.
     glfwSetErrorCallback(glfw_error_callback);
@@ -274,6 +434,11 @@ int main(int, char**)
     glfwSetWindowUserPointer(window, &editor);
     glfwSetDropCallback(window, glfw_drop_callback);
 
+    // If a path was provided then open it.
+    if (argc > 1) {
+        editor.open_file(argv[1]);
+    }
+
     // Main loop.
     while (!glfwWindowShouldClose(window))
     {
@@ -286,7 +451,11 @@ int main(int, char**)
         ImGui::NewFrame();
 
         // Define gui.
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ImGui::Begin("cfgedit_window", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
         editor.gui();
+        ImGui::End();
 
         // Draw.
         ImGui::Render();
