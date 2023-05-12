@@ -1,6 +1,6 @@
 # cfgedit
 
-Simple JSON config file editor built from [RapidJSON](rapidjson) and [Dear ImGUI](imgui).
+Simple JSON config file editor built from [RapidJSON][rapidjson] and [Dear ImGUI][imgui].
 
 ![gif of cfgedit editing a file](./docs/cfgedit.gif)
 
