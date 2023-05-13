@@ -30,8 +30,8 @@ No support for strings at the moment.
 
 ```Bash
 git clone https://github.com/nathanrw/cfgedit
-git submodule update --init --recursive
 cd cfgedit
+git submodule update --init --recursive
 mkdir _build
 cd _build
 cmake ..
