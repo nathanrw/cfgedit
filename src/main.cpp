@@ -275,6 +275,11 @@ void cfgedit::gui_for(const char* name, rapidjson::Value& value, int depth, int*
         }
     }
 
+    else if (value.IsString()) {
+        // Display string.
+        ImGui::LabelText(name, value.GetString());
+    }
+
     // Pop the Id we pushed before.
     ImGui::PopID();
 }
